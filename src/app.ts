@@ -6,13 +6,12 @@
 import type { CliRenderer, KeyEvent } from "@opentui/core";
 import type { GitHubGateway } from "./domain";
 import { initialState, update, type AppState, type Effect, type Event } from "./model";
-import { View, type ViewDeps } from "./view";
+import { View } from "./view";
 
 export interface RunAppOptions {
   renderer: CliRenderer;
   gateway: GitHubGateway;
   repo: string; // "owner/repo"
-  deps: ViewDeps;
   onQuit: () => void;
 }
 
@@ -22,7 +21,7 @@ export interface AppHandle {
 }
 
 export function runApp(opts: RunAppOptions): AppHandle {
-  const view = new View(opts.renderer, opts.deps);
+  const view = new View(opts.renderer);
   let state = initialState(opts.repo);
 
   function dispatch(event: Event) {

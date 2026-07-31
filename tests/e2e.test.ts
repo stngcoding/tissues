@@ -4,9 +4,22 @@
 // (#8, #10, #13, #14, #15, #16, #11, #17, #18). We assert on the actual
 // character frame the user would see.
 
+import { TextAttributes } from "@opentui/core";
 import { afterEach, describe, expect, test } from "bun:test";
 import { FakeGateway, sampleFixture } from "../src/fake-gateway";
 import { mountApp } from "./testkit";
+
+// Find the first rendered span whose text contains `needle`, so tests can assert
+// on its actual color/attributes (the styling captureCharFrame throws away).
+function findSpan(app: Awaited<ReturnType<typeof mountApp>>, needle: string) {
+  for (const line of app.captureSpans().lines) {
+    for (const span of line.spans) {
+      if (span.text.includes(needle)) return span;
+    }
+  }
+  return null;
+}
+const rgb = (c: { r: number; g: number; b: number }) => [c.r, c.g, c.b].map((x) => Math.round(x * 255)).join(",");
 
 let active: { destroy: () => Promise<void> } | null = null;
 
@@ -59,6 +72,30 @@ describe("#14 detail pane: read body", () => {
     const frame = app.captureCharFrame();
     // Detail header + body text that lives only in the detail pane.
     expect(frame).toContain("Detect the repo");
+  });
+
+  test("body renders as real Markdown: heading, bold, list, boxed code block", async () => {
+    const app = await mount(new FakeGateway(sampleFixture()));
+    app.mockInput.pressEnter();
+    await app.waitForVisualIdle();
+    const frame = app.captureCharFrame();
+
+    // Markdown markers are gone - not shown as literal plain text.
+    expect(frame).not.toContain("## Goal");
+    expect(frame).not.toContain("**before**");
+    expect(frame).not.toContain("```");
+    // List bullets and the fenced-code language label render.
+    expect(frame).toContain("• step one");
+    expect(frame).toContain("const x = 1;");
+
+    // Heading is bold + heading-blue; bold text is bold; code is code-orange.
+    const heading = findSpan(app, "Goal");
+    expect(heading).not.toBeNull();
+    expect(rgb(heading!.fg)).toBe("121,192,255");
+    expect(heading!.attributes & TextAttributes.BOLD).toBeTruthy();
+
+    expect(findSpan(app, "before")!.attributes & TextAttributes.BOLD).toBeTruthy();
+    expect(rgb(findSpan(app, "const x = 1;")!.fg)).toBe("255,166,87");
   });
 });
 

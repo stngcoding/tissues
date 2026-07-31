@@ -31,6 +31,7 @@
   "dependencies": {
     "@octokit/rest": "^22.0.1",
     "@opentui/core": "0.4.5",
+    "marked": "17.0.1",
     "web-tree-sitter": "0.25.10"
   }
 }

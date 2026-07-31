@@ -10,7 +10,7 @@ talks to GitHub through your existing `gh` CLI login.
 ## What it does
 
 - Lists the latest open (or closed) issues of the current repo.
-- Reads an issue's Markdown body and comments inline, with syntax highlighting.
+- Reads an issue's Markdown body and comments inline - headings, emphasis, lists, links, and boxed code blocks.
 - Closes and reopens issues (with a confirm step) without leaving the terminal.
 - Auto-detects the repo and reuses your `gh` auth - no config, no tokens to paste.
 

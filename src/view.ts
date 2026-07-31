@@ -6,20 +6,14 @@
 
 import {
   BoxRenderable,
-  MarkdownRenderable,
   RGBA,
   ScrollBoxRenderable,
-  SyntaxStyle,
   TextRenderable,
   type CliRenderer,
 } from "@opentui/core";
+import { uid } from "./ids";
+import { renderMarkdown } from "./markdown";
 import { LIST_WIDTH, type DetailVM, type OverlayVM, type Toast, type ViewModel } from "./model";
-
-export interface ViewDeps {
-  syntaxStyle: SyntaxStyle;
-  // Injected so tests use MockTreeSitterClient and prod uses the real worker.
-  treeSitterClient: unknown;
-}
 
 const FOCUSED = "#5FD7FF";
 const UNFOCUSED = "#444444";
@@ -27,12 +21,8 @@ const SELECTED_BG = "#3A3A3A";
 const SELECTED_FG = "#FFFFFF";
 const DIM_FG = "#888888";
 
-let seq = 0;
-const uid = (p: string) => `${p}-${seq++}`;
-
 export class View {
   private r: CliRenderer;
-  private deps: ViewDeps;
 
   private listBox!: ScrollBoxRenderable;
   private detailBox!: ScrollBoxRenderable;
@@ -47,9 +37,8 @@ export class View {
   private detailKey = "";
   private overlaySig = "";
 
-  constructor(r: CliRenderer, deps: ViewDeps) {
+  constructor(r: CliRenderer) {
     this.r = r;
-    this.deps = deps;
     this.build();
   }
 
@@ -330,14 +319,8 @@ export class View {
     );
   }
 
-  private markdown(content: string): MarkdownRenderable {
-    return new MarkdownRenderable(this.r, {
-      id: uid("md"),
-      content,
-      syntaxStyle: this.deps.syntaxStyle,
-      treeSitterClient: this.deps.treeSitterClient as any,
-      width: "100%",
-    } as any);
+  private markdown(content: string): BoxRenderable {
+    return renderMarkdown(this.r, content);
   }
 
   // --- detail scroll controls, driven by the host on focus == detail ---------
