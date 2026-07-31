@@ -24,29 +24,46 @@ is detected from the working directory.
 
 ## Install
 
+`tissues` is a Bun CLI. Pick whichever fits you - all of them give you a
+`tissues` command (or run it on the spot):
+
+```sh
+# Run without installing (Bun-native, recommended)
+bunx tissues
+
+# ...or via npm's runner
+npx tissues
+
+# Install it globally, then just type `tissues` anywhere
+bun add -g tissues      # or: npm i -g tissues
+```
+
+> Bun must be on your PATH even when you launch through `npx` - the CLI runs on
+> the Bun runtime (`#!/usr/bin/env bun`), because OpenTUI is Bun-only.
+
+### From source
+
+To hack on it, or before it's published to a registry:
+
 ```sh
 git clone https://github.com/stngcoding/tissues.git
 cd tissues
 bun install
+bun link            # registers a global `tissues` pointing at this checkout
 ```
 
-## Run
+## Usage
 
-From inside the repo whose issues you want to browse:
+`cd` into the repo whose issues you want to browse, then run it:
 
 ```sh
-bun run --cwd /path/to/tissues src/index.ts
+cd ~/code/some-project
+tissues
 ```
 
-Or, if you're already in the `tissues` directory, just:
-
-```sh
-bun run start        # alias for `bun run src/index.ts`
-```
-
-> The app reads issues from whatever repo your **current directory** belongs to,
-> so `cd` into the target project first (and point `bun run` at the tissues
-> checkout with `--cwd`, as above).
+That's the whole flow - the app reads issues from whatever repo your **current
+directory** belongs to, so there's nothing to configure. (Running from the
+source checkout instead? `bun run start` is the equivalent of `tissues`.)
 
 If it can't find a repo or you're not logged in, it says so and exits before the
 UI ever opens:
@@ -87,8 +104,9 @@ OpenTUI's headless test renderer.
 
 ## Distribution
 
-Run it with `bun run`, not a compiled binary. `bun build --compile` currently
-produces a binary that crashes at startup because of how OpenTUI 0.4.5 resolves
-its tree-sitter worker asset in the compiled runtime. See
+`tissues` ships as a Bun CLI (run via `bunx` / `npx` / a global install), not as
+a standalone compiled binary. `bun build --compile` currently produces a binary
+that crashes at startup because of how OpenTUI 0.4.5 resolves its tree-sitter
+worker asset in the compiled runtime. See
 [`docs/adr/0001`](docs/adr/0001-distribution-via-bun-run-not-compiled-binary.md)
 for the full finding.

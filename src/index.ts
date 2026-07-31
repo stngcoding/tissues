@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 // Entry point. Runs the startup sequence (repo detect + auth) BEFORE the TUI,
 // then wires the real gateway + renderer + tree-sitter client into the app.
 
