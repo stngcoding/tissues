@@ -127,6 +127,16 @@ function detailNumber(detail: DetailData): number | null {
   }
 }
 
+// Make the detail pane track the selected row: load the highlighted issue unless
+// the pane already references it. This is what lets selection preview live,
+// without waiting for Enter. Idempotent, so callers can invoke it freely.
+function trackSelection(state: AppState): { detail: DetailData; effects: Effect[] } {
+  const sel = selectedIssue(state);
+  if (!sel) return { detail: state.detail, effects: [] };
+  if (detailNumber(state.detail) === sel.number) return { detail: state.detail, effects: [] };
+  return { detail: { status: "loading", number: sel.number }, effects: [{ type: "GET_ISSUE", number: sel.number }] };
+}
+
 export function update(state: AppState, event: Event): Step {
   // While an overlay is up it swallows navigation; only CONFIRM/CANCEL/help act.
   const overlayUp = state.overlay.kind !== "none";
@@ -140,7 +150,9 @@ export function update(state: AppState, event: Event): Step {
       const n = state.list.issues.length;
       if (n === 0) return step(state);
       const selectedIndex = clamp(state.selectedIndex + event.delta, 0, n - 1);
-      return step({ ...state, selectedIndex, toast: null });
+      const moved = { ...state, selectedIndex, toast: null };
+      const { detail, effects } = trackSelection(moved);
+      return step({ ...moved, detail }, effects);
     }
 
     case "JUMP": {
@@ -150,7 +162,9 @@ export function update(state: AppState, event: Event): Step {
       const n = state.list.issues.length;
       if (n === 0) return step(state);
       const selectedIndex = event.to === "top" ? 0 : n - 1;
-      return step({ ...state, selectedIndex, toast: null });
+      const jumped = { ...state, selectedIndex, toast: null };
+      const { detail, effects } = trackSelection(jumped);
+      return step({ ...jumped, detail }, effects);
     }
 
     case "TOGGLE_FOCUS": {
@@ -160,13 +174,13 @@ export function update(state: AppState, event: Event): Step {
     }
 
     case "OPEN_SELECTED": {
+      // Selection already previews the issue live; Enter just moves focus into
+      // the detail pane (loading it too, on the off chance it isn't yet).
       if (overlayUp) return step(state);
       const sel = selectedIssue(state);
       if (!sel) return step(state);
-      return step(
-        { ...state, detail: { status: "loading", number: sel.number }, focus: "detail", toast: null },
-        [{ type: "GET_ISSUE", number: sel.number }],
-      );
+      const { detail, effects } = trackSelection(state);
+      return step({ ...state, detail, focus: "detail", toast: null }, effects);
     }
 
     case "TOGGLE_LIST_STATE": {
@@ -223,7 +237,9 @@ export function update(state: AppState, event: Event): Step {
       // Ignore stale results from a set we've since toggled away from.
       if (event.state !== state.listState) return step(state);
       const selectedIndex = clamp(state.selectedIndex, 0, Math.max(0, event.issues.length - 1));
-      return step({ ...state, list: { status: "ready", issues: event.issues }, selectedIndex });
+      const ready = { ...state, list: { status: "ready" as const, issues: event.issues }, selectedIndex };
+      const { detail, effects } = trackSelection(ready);
+      return step({ ...ready, detail }, effects);
     }
 
     case "ISSUES_FAILED": {
@@ -317,7 +333,7 @@ export interface ViewModel {
 const KEYBINDINGS: { key: string; action: string }[] = [
   { key: "j / ↓", action: "move selection down" },
   { key: "k / ↑", action: "move selection up" },
-  { key: "Enter", action: "open selected issue" },
+  { key: "Enter", action: "focus detail pane" },
   { key: "Tab", action: "toggle list / detail focus" },
   { key: "g / G", action: "jump to top / bottom" },
   { key: "o", action: "toggle open / closed list" },
@@ -365,7 +381,7 @@ export function toViewModel(state: AppState): ViewModel {
 function detailVM(state: AppState): DetailVM {
   switch (state.detail.status) {
     case "empty":
-      return { kind: "empty", message: "Select an issue and press Enter to read it." };
+      return { kind: "empty", message: "No issue selected." };
     case "loading":
       return { kind: "loading" };
     case "error":
@@ -409,7 +425,7 @@ function overlayVM(state: AppState): OverlayVM {
 function footerFor(state: AppState): string {
   const toggle = state.listState === "open" ? "o closed" : "o open";
   const mutate = state.listState === "open" ? "c close" : "r reopen";
-  return `j/k move · ↵ open · ${toggle} · ${mutate} · tab focus · ? help · q quit`;
+  return `j/k move · ↵ detail · ${toggle} · ${mutate} · tab focus · ? help · q quit`;
 }
 
 // ---------------------------------------------------------------------------

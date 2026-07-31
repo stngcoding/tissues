@@ -58,13 +58,33 @@ describe("open/closed toggle", () => {
   });
 });
 
-describe("open a detail", () => {
-  test("Enter emits GET_ISSUE for the selected issue and focuses detail", () => {
-    const s = loaded();
-    const step = update(s, { type: "OPEN_SELECTED" });
+describe("detail tracks selection", () => {
+  test("list load previews the top issue without waiting for Enter", () => {
+    const s0 = initialState("stngcoding/tissues");
+    const step = update(s0, { type: "ISSUES_LOADED", state: "open", issues: openIssues });
     expect(step.effects).toEqual([{ type: "GET_ISSUE", number: 42 }]);
+    expect(step.state.detail).toMatchObject({ status: "loading", number: 42 });
+    expect(step.state.focus).toBe("list"); // stays in the list to keep browsing
+  });
+
+  test("MOVE loads the newly selected issue's detail live", () => {
+    const step = update(loaded(), { type: "MOVE", delta: 1 });
+    expect(step.effects).toEqual([{ type: "GET_ISSUE", number: 41 }]);
+    expect(step.state.detail).toMatchObject({ status: "loading", number: 41 });
+    expect(step.state.focus).toBe("list");
+  });
+
+  test("JUMP loads the jumped-to issue's detail live", () => {
+    const step = update(loaded(), { type: "JUMP", to: "bottom" });
+    expect(step.effects).toEqual([{ type: "GET_ISSUE", number: 40 }]);
+    expect(step.state.detail).toMatchObject({ status: "loading", number: 40 });
+  });
+
+  test("Enter focuses the detail pane; no re-fetch when already previewed", () => {
+    const s = loaded(); // detail already tracking #42
+    const step = update(s, { type: "OPEN_SELECTED" });
+    expect(step.effects).toEqual([]);
     expect(step.state.focus).toBe("detail");
-    expect(step.state.detail.status).toBe("loading");
   });
 });
 
@@ -108,7 +128,11 @@ describe("confirm flow", () => {
     const s = loaded();
     const step = update(s, { type: "MUTATION_DONE", action: "close", number: 42 });
     expect(step.state.toast).toEqual({ text: "#42 closed", tone: "success" });
-    expect(step.effects).toEqual([{ type: "LIST", state: "open" }]);
+    // Re-lists, and refetches the detail since the pane is previewing #42.
+    expect(step.effects).toEqual([
+      { type: "LIST", state: "open" },
+      { type: "GET_ISSUE", number: 42 },
+    ]);
   });
 
   test("MUTATION_FAILED shows an error-toned toast (never a success check)", () => {
