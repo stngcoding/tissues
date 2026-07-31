@@ -29,14 +29,17 @@ is detected from the working directory.
 
 ```sh
 # Run without installing (Bun-native, recommended)
-bunx tissues
+bunx @stngcoding/tissues
 
 # ...or via npm's runner
-npx tissues
+npx @stngcoding/tissues
 
 # Install it globally, then just type `tissues` anywhere
-bun add -g tissues      # or: npm i -g tissues
+bun add -g @stngcoding/tissues      # or: npm i -g @stngcoding/tissues
 ```
+
+The package name on npm is `@stngcoding/tissues`; the command it installs is
+just `tissues`.
 
 > Bun must be on your PATH even when you launch through `npx` - the CLI runs on
 > the Bun runtime (`#!/usr/bin/env bun`), because OpenTUI is Bun-only.

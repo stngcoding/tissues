@@ -1,5 +1,5 @@
 {
-  "name": "tissues",
+  "name": "@stngcoding/tissues",
   "version": "0.1.0",
   "description": "Terminal UI for browsing and triaging the current repo's GitHub issues",
   "type": "module",
