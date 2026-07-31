@@ -76,20 +76,25 @@ UI ever opens:
 
 ## Keys
 
-| Key       | Action                        |
-| --------- | ----------------------------- |
-| `j` / `↓` | move selection down           |
-| `k` / `↑` | move selection up             |
-| `Enter`   | open the selected issue       |
-| `Tab`     | toggle list / detail focus    |
-| `g` / `G` | jump to top / bottom          |
-| `o`       | toggle open / closed list     |
-| `c`       | close the selected issue      |
-| `r`       | reopen the selected issue     |
-| `?`       | show / hide this help         |
-| `q`       | quit                          |
+| Key       | Action                             |
+| --------- | ---------------------------------- |
+| `j` / `↓` | move selection down                |
+| `k` / `↑` | move selection up                  |
+| `Enter`   | focus detail / switch to repo      |
+| `Tab`     | cycle repos / list / detail focus  |
+| `g` / `G` | jump to top / bottom               |
+| `o`       | toggle open / closed list          |
+| `a`       | add a repo (`owner/repo`)          |
+| `s`       | go to issue by number              |
+| `Shift+R` | reload the list                    |
+| `c`       | close the selected issue           |
+| `r`       | reopen the selected issue          |
+| `?`       | show / hide this help              |
+| `q`       | quit                               |
 
-When the detail pane is focused (`Tab`), `j`/`k`/`g`/`G` scroll the issue body
+The left column stacks a scrollable **repo list** over the issue list: `Tab`
+to the repo pane, `j`/`k` to highlight a repo, `Enter` to switch to it. Add more
+with `a`. When the detail pane is focused, `j`/`k`/`g`/`G` scroll the issue body
 instead of moving the list selection.
 
 ## Development

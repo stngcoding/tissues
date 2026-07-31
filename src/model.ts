@@ -11,7 +11,7 @@ import type { IssueDetail, IssueState, IssueSummary } from "./domain";
 // State
 // ---------------------------------------------------------------------------
 
-export type Focus = "list" | "detail";
+export type Focus = "repos" | "list" | "detail";
 
 type ListData =
   | { status: "loading" }
@@ -27,6 +27,8 @@ type DetailData =
 export type Overlay =
   | { kind: "none" }
   | { kind: "help" }
+  | { kind: "goto"; query: string } // "s": type an issue number, Enter to open it
+  | { kind: "addrepo"; query: string } // "a": type "owner/repo", Enter to add + switch
   | { kind: "confirm"; action: "close" | "reopen"; number: number; title: string };
 
 // A transient status line. `tone` drives its color + icon so a failed mutation
@@ -37,7 +39,9 @@ export interface Toast {
 }
 
 export interface AppState {
-  repo: string; // "owner/repo"
+  repos: string[]; // known repos, "owner/repo" each; the top-pane list
+  selectedRepoIndex: number; // which repo row is highlighted
+  repo: string; // the ACTIVE repo whose issues are loaded ("owner/repo")
   listState: IssueState;
   list: ListData;
   selectedIndex: number;
@@ -49,6 +53,8 @@ export interface AppState {
 
 export function initialState(repo: string): AppState {
   return {
+    repos: [repo],
+    selectedRepoIndex: 0,
     repo,
     listState: "open",
     list: { status: "loading" },
@@ -71,28 +77,38 @@ export type Event =
   | { type: "OPEN_SELECTED" } // Enter
   | { type: "TOGGLE_FOCUS" } // Tab
   | { type: "TOGGLE_LIST_STATE" } // o
+  | { type: "RELOAD" } // Shift+R: re-fetch the current list
   | { type: "REQUEST_CLOSE" } // c
   | { type: "REQUEST_REOPEN" } // r
+  | { type: "REQUEST_GOTO" } // s: open the go-to-issue prompt
+  | { type: "GOTO_APPEND"; char: string } // digit typed in the go-to prompt
+  | { type: "GOTO_BACKSPACE" } // Backspace in the go-to prompt
+  | { type: "GOTO_SUBMIT" } // Enter in the go-to prompt
+  | { type: "REQUEST_ADDREPO" } // a: open the add-repo prompt
+  | { type: "ADDREPO_APPEND"; char: string } // char typed in the add-repo prompt
+  | { type: "ADDREPO_BACKSPACE" } // Backspace in the add-repo prompt
+  | { type: "ADDREPO_SUBMIT" } // Enter in the add-repo prompt
   | { type: "CONFIRM" } // Enter in overlay
   | { type: "CANCEL" } // Esc
   | { type: "TOGGLE_HELP" } // ?
-  // effect results (fed back by the host)
-  | { type: "ISSUES_LOADED"; state: IssueState; issues: IssueSummary[] }
-  | { type: "ISSUES_FAILED"; state: IssueState; message: string }
-  | { type: "ISSUE_LOADED"; issue: IssueDetail }
-  | { type: "ISSUE_FAILED"; number: number; message: string }
-  | { type: "MUTATION_DONE"; action: "close" | "reopen"; number: number }
-  | { type: "MUTATION_FAILED"; message: string };
+  // effect results (fed back by the host) - each carries the repo it came from
+  // so a result for a repo we've since switched away from is dropped as stale.
+  | { type: "ISSUES_LOADED"; repo: string; state: IssueState; issues: IssueSummary[] }
+  | { type: "ISSUES_FAILED"; repo: string; state: IssueState; message: string }
+  | { type: "ISSUE_LOADED"; repo: string; issue: IssueDetail }
+  | { type: "ISSUE_FAILED"; repo: string; number: number; message: string }
+  | { type: "MUTATION_DONE"; repo: string; action: "close" | "reopen"; number: number }
+  | { type: "MUTATION_FAILED"; repo: string; message: string };
 
 // ---------------------------------------------------------------------------
 // Effects (data requests the host fulfils via the gateway)
 // ---------------------------------------------------------------------------
 
 export type Effect =
-  | { type: "LIST"; state: IssueState }
-  | { type: "GET_ISSUE"; number: number }
-  | { type: "CLOSE"; number: number }
-  | { type: "REOPEN"; number: number }
+  | { type: "LIST"; repo: string; state: IssueState }
+  | { type: "GET_ISSUE"; repo: string; number: number }
+  | { type: "CLOSE"; repo: string; number: number }
+  | { type: "REOPEN"; repo: string; number: number }
   | { type: "QUIT" };
 
 // ---------------------------------------------------------------------------
@@ -134,7 +150,28 @@ function trackSelection(state: AppState): { detail: DetailData; effects: Effect[
   const sel = selectedIssue(state);
   if (!sel) return { detail: state.detail, effects: [] };
   if (detailNumber(state.detail) === sel.number) return { detail: state.detail, effects: [] };
-  return { detail: { status: "loading", number: sel.number }, effects: [{ type: "GET_ISSUE", number: sel.number }] };
+  return {
+    detail: { status: "loading", number: sel.number },
+    effects: [{ type: "GET_ISSUE", repo: state.repo, number: sel.number }],
+  };
+}
+
+// Make `repo` the active repo: reset the issue list to loading and re-fetch it,
+// clearing selection + detail so nothing from the previous repo lingers. Focus
+// drops into the issue list so the user lands where the new issues appear.
+function switchRepo(state: AppState, repo: string): Step {
+  return step(
+    {
+      ...state,
+      repo,
+      list: { status: "loading" },
+      selectedIndex: 0,
+      focus: "list",
+      detail: { status: "empty" },
+      toast: null,
+    },
+    [{ type: "LIST", repo, state: state.listState }],
+  );
 }
 
 export function update(state: AppState, event: Event): Step {
@@ -143,7 +180,14 @@ export function update(state: AppState, event: Event): Step {
 
   switch (event.type) {
     case "MOVE": {
-      if (overlayUp || state.focus !== "list" || state.list.status !== "ready") {
+      if (overlayUp) return step(state);
+      if (state.focus === "repos") {
+        const n = state.repos.length;
+        if (n === 0) return step(state);
+        const selectedRepoIndex = clamp(state.selectedRepoIndex + event.delta, 0, n - 1);
+        return step({ ...state, selectedRepoIndex, toast: null });
+      }
+      if (state.focus !== "list" || state.list.status !== "ready") {
         // Detail-focused movement is native ScrollBox scrolling (host-handled).
         return step(state);
       }
@@ -156,7 +200,14 @@ export function update(state: AppState, event: Event): Step {
     }
 
     case "JUMP": {
-      if (overlayUp || state.focus !== "list" || state.list.status !== "ready") {
+      if (overlayUp) return step(state);
+      if (state.focus === "repos") {
+        const n = state.repos.length;
+        if (n === 0) return step(state);
+        const selectedRepoIndex = event.to === "top" ? 0 : n - 1;
+        return step({ ...state, selectedRepoIndex, toast: null });
+      }
+      if (state.focus !== "list" || state.list.status !== "ready") {
         return step(state);
       }
       const n = state.list.issues.length;
@@ -169,14 +220,23 @@ export function update(state: AppState, event: Event): Step {
 
     case "TOGGLE_FOCUS": {
       if (overlayUp) return step(state);
-      const focus: Focus = state.focus === "list" ? "detail" : "list";
-      return step({ ...state, focus, toast: null });
+      // Cycle repos -> list -> detail -> repos.
+      const next: Record<Focus, Focus> = { repos: "list", list: "detail", detail: "repos" };
+      return step({ ...state, focus: next[state.focus], toast: null });
     }
 
     case "OPEN_SELECTED": {
+      if (overlayUp) return step(state);
+      if (state.focus === "repos") {
+        // Enter on a repo row activates it. If it's already the active repo,
+        // just drop focus into its issue list rather than needlessly re-fetch.
+        const target = state.repos[state.selectedRepoIndex];
+        if (!target) return step(state);
+        if (target === state.repo) return step({ ...state, focus: "list", toast: null });
+        return switchRepo(state, target);
+      }
       // Selection already previews the issue live; Enter just moves focus into
       // the detail pane (loading it too, on the off chance it isn't yet).
-      if (overlayUp) return step(state);
       const sel = selectedIssue(state);
       if (!sel) return step(state);
       const { detail, effects } = trackSelection(state);
@@ -188,7 +248,84 @@ export function update(state: AppState, event: Event): Step {
       const listState: IssueState = state.listState === "open" ? "closed" : "open";
       return step(
         { ...state, listState, list: { status: "loading" }, selectedIndex: 0, focus: "list", toast: null },
-        [{ type: "LIST", state: listState }],
+        [{ type: "LIST", repo: state.repo, state: listState }],
+      );
+    }
+
+    case "RELOAD": {
+      // Re-fetch the current set, keeping selection (ISSUES_LOADED re-clamps it).
+      if (overlayUp) return step(state);
+      return step({ ...state, list: { status: "loading" }, toast: null }, [
+        { type: "LIST", repo: state.repo, state: state.listState },
+      ]);
+    }
+
+    case "REQUEST_GOTO": {
+      if (overlayUp) return step(state);
+      return step({ ...state, overlay: { kind: "goto", query: "" }, toast: null });
+    }
+
+    case "GOTO_APPEND": {
+      if (state.overlay.kind !== "goto") return step(state);
+      if (state.overlay.query.length >= 9) return step(state); // no issue number is this long
+      return step({ ...state, overlay: { kind: "goto", query: state.overlay.query + event.char } });
+    }
+
+    case "GOTO_BACKSPACE": {
+      if (state.overlay.kind !== "goto") return step(state);
+      return step({ ...state, overlay: { kind: "goto", query: state.overlay.query.slice(0, -1) } });
+    }
+
+    case "GOTO_SUBMIT": {
+      if (state.overlay.kind !== "goto") return step(state);
+      const n = Number.parseInt(state.overlay.query, 10);
+      if (!Number.isFinite(n) || n <= 0) return step({ ...state, overlay: { kind: "none" } });
+      // Load the issue by number directly - it need not be in the current list
+      // (e.g. a closed issue while viewing the open set). If it happens to be in
+      // the list, move selection there too so the row highlights.
+      let selectedIndex = state.selectedIndex;
+      if (state.list.status === "ready") {
+        const idx = state.list.issues.findIndex((i) => i.number === n);
+        if (idx >= 0) selectedIndex = idx;
+      }
+      return step(
+        { ...state, overlay: { kind: "none" }, selectedIndex, detail: { status: "loading", number: n }, focus: "detail", toast: null },
+        [{ type: "GET_ISSUE", repo: state.repo, number: n }],
+      );
+    }
+
+    case "REQUEST_ADDREPO": {
+      if (overlayUp) return step(state);
+      return step({ ...state, overlay: { kind: "addrepo", query: "" }, toast: null });
+    }
+
+    case "ADDREPO_APPEND": {
+      if (state.overlay.kind !== "addrepo") return step(state);
+      if (state.overlay.query.length >= 80) return step(state);
+      return step({ ...state, overlay: { kind: "addrepo", query: state.overlay.query + event.char } });
+    }
+
+    case "ADDREPO_BACKSPACE": {
+      if (state.overlay.kind !== "addrepo") return step(state);
+      return step({ ...state, overlay: { kind: "addrepo", query: state.overlay.query.slice(0, -1) } });
+    }
+
+    case "ADDREPO_SUBMIT": {
+      if (state.overlay.kind !== "addrepo") return step(state);
+      const entry = state.overlay.query.trim();
+      // Require a single "owner/repo" - no spaces, exactly one slash, both sides
+      // non-empty. Anything else just closes the prompt without adding.
+      if (!/^[^/\s]+\/[^/\s]+$/.test(entry)) return step({ ...state, overlay: { kind: "none" } });
+      const existing = state.repos.indexOf(entry);
+      if (existing >= 0) {
+        // Already known: highlight it, and switch only if it isn't active already.
+        const withSel = { ...state, selectedRepoIndex: existing, overlay: { kind: "none" as const } };
+        return entry === state.repo ? step({ ...withSel, focus: "list" as const }) : switchRepo(withSel, entry);
+      }
+      const repos = [...state.repos, entry];
+      return switchRepo(
+        { ...state, repos, selectedRepoIndex: repos.length - 1, overlay: { kind: "none" } },
+        entry,
       );
     }
 
@@ -227,15 +364,18 @@ export function update(state: AppState, event: Event): Step {
     case "CONFIRM": {
       if (state.overlay.kind !== "confirm") return step(state);
       const { action, number } = state.overlay;
-      const effect: Effect = action === "close" ? { type: "CLOSE", number } : { type: "REOPEN", number };
+      const effect: Effect =
+        action === "close"
+          ? { type: "CLOSE", repo: state.repo, number }
+          : { type: "REOPEN", repo: state.repo, number };
       return step({ ...state, overlay: { kind: "none" } }, [effect]);
     }
 
     // ---- effect results -----------------------------------------------------
 
     case "ISSUES_LOADED": {
-      // Ignore stale results from a set we've since toggled away from.
-      if (event.state !== state.listState) return step(state);
+      // Ignore stale results from a set/repo we've since toggled or switched away from.
+      if (event.repo !== state.repo || event.state !== state.listState) return step(state);
       const selectedIndex = clamp(state.selectedIndex, 0, Math.max(0, event.issues.length - 1));
       const ready = { ...state, list: { status: "ready" as const, issues: event.issues }, selectedIndex };
       const { detail, effects } = trackSelection(ready);
@@ -243,12 +383,14 @@ export function update(state: AppState, event: Event): Step {
     }
 
     case "ISSUES_FAILED": {
-      if (event.state !== state.listState) return step(state);
+      if (event.repo !== state.repo || event.state !== state.listState) return step(state);
       return step({ ...state, list: { status: "error", message: event.message } });
     }
 
     case "ISSUE_LOADED": {
-      // Ignore if the user navigated to a different issue meanwhile.
+      // Ignore results from another repo, or if the user navigated to a
+      // different issue meanwhile.
+      if (event.repo !== state.repo) return step(state);
       if (state.detail.status === "loading" && state.detail.number !== event.issue.number) {
         return step(state);
       }
@@ -256,6 +398,7 @@ export function update(state: AppState, event: Event): Step {
     }
 
     case "ISSUE_FAILED": {
+      if (event.repo !== state.repo) return step(state);
       if (state.detail.status === "loading" && state.detail.number !== event.number) {
         return step(state);
       }
@@ -263,22 +406,26 @@ export function update(state: AppState, event: Event): Step {
     }
 
     case "MUTATION_DONE": {
+      // Drop a mutation that resolved after we switched repos: switching back
+      // re-lists that repo fresh, so nothing is lost by ignoring it here.
+      if (event.repo !== state.repo) return step(state);
       const text = `#${event.number} ${event.action === "close" ? "closed" : "reopened"}`;
       // Re-list the current set so the mutated issue drops out (close from the
       // open list) or the count updates; simplest correct refresh.
-      const effects: Effect[] = [{ type: "LIST", state: state.listState }];
+      const effects: Effect[] = [{ type: "LIST", repo: state.repo, state: state.listState }];
       // If the detail pane is showing the issue we just mutated, its cached
       // IssueDetail is now stale (wrong state, missing/lingering badge). Re-fetch
       // it so the pane reflects the new state instead of the pre-mutation one.
       let detail = state.detail;
       if (detailNumber(state.detail) === event.number) {
         detail = { status: "loading", number: event.number };
-        effects.push({ type: "GET_ISSUE", number: event.number });
+        effects.push({ type: "GET_ISSUE", repo: state.repo, number: event.number });
       }
       return step({ ...state, toast: { text, tone: "success" }, list: { status: "loading" }, detail }, effects);
     }
 
     case "MUTATION_FAILED": {
+      if (event.repo !== state.repo) return step(state);
       return step({ ...state, toast: { text: event.message, tone: "error" } });
     }
   }
@@ -300,6 +447,12 @@ export interface RowVM {
   selected: boolean;
 }
 
+export interface RepoRowVM {
+  text: string;
+  selected: boolean; // highlighted row (matters when the repo pane is focused)
+  active: boolean; // the repo whose issues are currently loaded
+}
+
 export type DetailVM =
   | { kind: "empty"; message: string }
   | { kind: "loading" }
@@ -317,9 +470,14 @@ export type DetailVM =
 export type OverlayVM =
   | { kind: "none" }
   | { kind: "help"; title: string; bindings: { key: string; action: string }[] }
+  | { kind: "goto"; title: string; inputLine: string; hint: string }
+  | { kind: "addrepo"; title: string; inputLine: string; hint: string }
   | { kind: "confirm"; title: string; issueLine: string; reasonLine: string | null };
 
 export interface ViewModel {
+  repoHeader: string; // "Repos (2)"
+  repos: RepoRowVM[];
+  reposFocused: boolean;
   listHeader: string; // "owner/repo · OPEN (28)"
   rows: RowVM[];
   listMessage: string | null; // empty/error message shown in list pane
@@ -333,10 +491,13 @@ export interface ViewModel {
 const KEYBINDINGS: { key: string; action: string }[] = [
   { key: "j / ↓", action: "move selection down" },
   { key: "k / ↑", action: "move selection up" },
-  { key: "Enter", action: "focus detail pane" },
-  { key: "Tab", action: "toggle list / detail focus" },
+  { key: "Enter", action: "focus detail / switch repo" },
+  { key: "Tab", action: "cycle repos / list / detail" },
   { key: "g / G", action: "jump to top / bottom" },
   { key: "o", action: "toggle open / closed list" },
+  { key: "Shift+R", action: "reload the list" },
+  { key: "a", action: "add a repo" },
+  { key: "s", action: "go to issue by number" },
   { key: "c", action: "close selected issue" },
   { key: "r", action: "reopen selected issue" },
   { key: "?", action: "toggle this help" },
@@ -366,7 +527,16 @@ export function toViewModel(state: AppState): ViewModel {
 
   const listHeader = `${repoName} · ${setLabel} (${count})`;
 
+  const repos: RepoRowVM[] = state.repos.map((r, i) => ({
+    text: truncate(r, ROW_TEXT_WIDTH),
+    selected: i === state.selectedRepoIndex,
+    active: r === state.repo,
+  }));
+
   return {
+    repoHeader: `Repos (${state.repos.length})`,
+    repos,
+    reposFocused: state.focus === "repos",
     listHeader,
     rows,
     listMessage,
@@ -412,6 +582,17 @@ function overlayVM(state: AppState): OverlayVM {
   const o = state.overlay;
   if (o.kind === "none") return { kind: "none" };
   if (o.kind === "help") return { kind: "help", title: "Keybindings", bindings: KEYBINDINGS };
+  if (o.kind === "goto") {
+    return { kind: "goto", title: "Go to issue", inputLine: `#${o.query}`, hint: "[ Enter ] open     [ Esc ] cancel" };
+  }
+  if (o.kind === "addrepo") {
+    return {
+      kind: "addrepo",
+      title: "Add repo",
+      inputLine: o.query,
+      hint: "owner/repo   ·   [ Enter ] add     [ Esc ] cancel",
+    };
+  }
   // confirm
   const verb = o.action === "close" ? "Close" : "Reopen";
   return {
@@ -425,7 +606,7 @@ function overlayVM(state: AppState): OverlayVM {
 function footerFor(state: AppState): string {
   const toggle = state.listState === "open" ? "o closed" : "o open";
   const mutate = state.listState === "open" ? "c close" : "r reopen";
-  return `j/k move · ↵ detail · ${toggle} · ${mutate} · tab focus · ? help · q quit`;
+  return `j/k move · ↵ detail · ${toggle} · ${mutate} · a add-repo · s goto · R reload · tab focus · ? help · q quit`;
 }
 
 // ---------------------------------------------------------------------------

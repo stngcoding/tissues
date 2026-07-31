@@ -22,7 +22,9 @@ export async function mountApp(gateway: GitHubGateway, opts: MountOptions = {}) 
 
   const handle: AppHandle = runApp({
     renderer: setup.renderer,
-    gateway,
+    // Every repo resolves to the same fake; multi-repo tests that need distinct
+    // data per repo can pass their own factory-backed gateway instead.
+    makeGateway: () => gateway,
     repo,
     onQuit: () => {
       quit = true;

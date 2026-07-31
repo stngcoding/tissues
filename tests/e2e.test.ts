@@ -123,12 +123,15 @@ describe("#15 comments inline", () => {
 });
 
 describe("#16 focus + jump navigation", () => {
-  test("Tab moves focus to the detail pane", async () => {
+  test("Tab cycles focus repos -> list -> detail", async () => {
     const app = await mount(new FakeGateway(sampleFixture()));
     app.mockInput.pressEnter();
     await app.waitForVisualIdle();
-    // Enter already focuses detail; Tab flips back to the list.
+    // Enter already focuses detail; Tab then wraps through repos and back to list.
     expect(app.handle.getState().focus).toBe("detail");
+    app.mockInput.pressTab();
+    await app.waitForVisualIdle();
+    expect(app.handle.getState().focus).toBe("repos");
     app.mockInput.pressTab();
     await app.waitForVisualIdle();
     expect(app.handle.getState().focus).toBe("list");
@@ -145,6 +148,28 @@ describe("#16 focus + jump navigation", () => {
     app.mockInput.pressKey("g");
     await app.waitForVisualIdle();
     expect(app.handle.getState().selectedIndex).toBe(0);
+  });
+});
+
+describe("add repo + scrollable repo pane", () => {
+  test("the repo pane shows the current repo above the issue list on boot", async () => {
+    const app = await mount(new FakeGateway(sampleFixture()));
+    const frame = app.captureCharFrame();
+    expect(frame).toContain("Repos (1)");
+    expect(frame).toContain("stngcoding/tissues");
+  });
+
+  test("`a` then typing owner/repo adds it and makes it active", async () => {
+    const app = await mount(new FakeGateway(sampleFixture()));
+    app.mockInput.pressKey("a");
+    await app.waitForVisualIdle();
+    expect(app.captureCharFrame()).toContain("Add repo");
+    for (const c of "octo/demo") app.mockInput.pressKey(c);
+    app.mockInput.pressEnter();
+    await app.waitForVisualIdle();
+    const frame = app.captureCharFrame();
+    expect(frame).toContain("Repos (2)");
+    expect(frame).toContain("octo/demo");
   });
 });
 

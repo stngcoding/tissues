@@ -13,17 +13,22 @@ import {
 } from "@opentui/core";
 import { uid } from "./ids";
 import { renderMarkdown } from "./markdown";
-import { LIST_WIDTH, type DetailVM, type OverlayVM, type Toast, type ViewModel } from "./model";
+import { LIST_WIDTH, type DetailVM, type OverlayVM, type RepoRowVM, type Toast, type ViewModel } from "./model";
 
 const FOCUSED = "#5FD7FF";
 const UNFOCUSED = "#444444";
 const SELECTED_BG = "#3A3A3A";
 const SELECTED_FG = "#FFFFFF";
 const DIM_FG = "#888888";
+const ACTIVE_FG = "#3FB950"; // the currently-loaded repo's marker
+
+// Repo pane height: border (2) + up to 6 visible rows; scrolls beyond that.
+const REPO_PANE_HEIGHT = 8;
 
 export class View {
   private r: CliRenderer;
 
+  private repoBox!: ScrollBoxRenderable;
   private listBox!: ScrollBoxRenderable;
   private detailBox!: ScrollBoxRenderable;
   private footer!: TextRenderable;
@@ -32,6 +37,7 @@ export class View {
   private overlayLayer!: BoxRenderable;
   private overlayCard!: BoxRenderable;
 
+  private repoSig = "";
   private rowSig = "";
   private detailSig = "";
   private detailKey = "";
@@ -58,16 +64,39 @@ export class View {
       flexDirection: "row",
     });
 
-    this.listBox = new ScrollBoxRenderable(r, {
-      id: uid("list"),
+    // Left column: a fixed-height scrollable repo list stacked over the issue
+    // list, which grows to fill the rest.
+    const leftCol = new BoxRenderable(r, {
+      id: uid("left"),
       width: LIST_WIDTH,
       height: "100%",
+      flexDirection: "column",
+    });
+
+    this.repoBox = new ScrollBoxRenderable(r, {
+      id: uid("repos"),
+      width: "100%",
+      height: REPO_PANE_HEIGHT,
+      border: true,
+      borderStyle: "rounded",
+      borderColor: UNFOCUSED,
+      title: "",
+      titleAlignment: "left",
+    });
+
+    this.listBox = new ScrollBoxRenderable(r, {
+      id: uid("list"),
+      width: "100%",
+      flexGrow: 1,
       border: true,
       borderStyle: "rounded",
       borderColor: FOCUSED,
       title: "",
       titleAlignment: "left",
     });
+
+    leftCol.add(this.repoBox);
+    leftCol.add(this.listBox);
 
     this.detailBox = new ScrollBoxRenderable(r, {
       id: uid("detail"),
@@ -80,7 +109,7 @@ export class View {
       titleAlignment: "left",
     });
 
-    mainRow.add(this.listBox);
+    mainRow.add(leftCol);
     mainRow.add(this.detailBox);
 
     this.footer = new TextRenderable(r, {
@@ -143,15 +172,45 @@ export class View {
   }
 
   render(vm: ViewModel) {
+    this.repoBox.title = ` ${vm.repoHeader} `;
+    this.repoBox.borderColor = vm.focus === "repos" ? FOCUSED : UNFOCUSED;
     this.listBox.title = ` ${vm.listHeader} `;
     this.listBox.borderColor = vm.focus === "list" ? FOCUSED : UNFOCUSED;
     this.detailBox.borderColor = vm.focus === "detail" ? FOCUSED : UNFOCUSED;
     this.footer.content = vm.footer;
 
+    this.renderRepos(vm);
     this.renderList(vm);
     this.renderDetail(vm.detail);
     this.renderToast(vm.toast);
     this.renderOverlay(vm.overlay);
+  }
+
+  private renderRepos(vm: ViewModel) {
+    // The highlight only reads as "selected" when the pane is focused; otherwise
+    // just the active-repo marker shows, so an unfocused pane isn't noisy.
+    const sig = JSON.stringify({ repos: vm.repos, focused: vm.reposFocused });
+    if (sig === this.repoSig) return;
+    this.repoSig = sig;
+    this.clearChildren(this.repoBox);
+
+    let selectedId: string | null = null;
+    for (const repo of vm.repos) {
+      const id = uid("repo");
+      const highlighted = repo.selected && vm.reposFocused;
+      if (repo.selected) selectedId = id;
+      const marker = repo.active ? "● " : "  ";
+      this.repoBox.add(
+        new TextRenderable(this.r, {
+          id,
+          content: `${marker}${repo.text}`,
+          width: "100%",
+          fg: highlighted ? SELECTED_FG : repo.active ? ACTIVE_FG : undefined,
+          bg: highlighted ? SELECTED_BG : undefined,
+        }),
+      );
+    }
+    if (selectedId) this.repoBox.scrollChildIntoView(selectedId);
   }
 
   private renderList(vm: ViewModel) {
@@ -295,6 +354,17 @@ export class View {
       );
       this.overlayCard.add(
         new TextRenderable(this.r, { id: uid("hk-esc"), content: "Press ? or Esc to close", fg: DIM_FG, width: "100%" }),
+      );
+      return;
+    }
+
+    if (o.kind === "goto" || o.kind === "addrepo") {
+      this.overlayCard.title = ` ${o.title} `;
+      this.overlayCard.add(
+        new TextRenderable(this.r, { id: uid("in-input"), content: `${o.inputLine}▌`, fg: SELECTED_FG, marginBottom: 1, width: "100%" }),
+      );
+      this.overlayCard.add(
+        new TextRenderable(this.r, { id: uid("in-hint"), content: o.hint, fg: DIM_FG, width: "100%" }),
       );
       return;
     }

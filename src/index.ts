@@ -11,13 +11,17 @@ import { realStartupIO, startup } from "./startup";
 const { owner, repo, token } = startup(realStartupIO);
 
 const octokit = new Octokit({ auth: token });
-const gateway = new OctokitGateway(octokit, owner, repo);
+// One gateway per repo, built on demand as the user adds/switches repos.
+const makeGateway = (nameWithOwner: string) => {
+  const [o, r] = nameWithOwner.split("/");
+  return new OctokitGateway(octokit, o!, r!);
+};
 
 const renderer = await createCliRenderer({ exitOnCtrlC: true, targetFps: 30 });
 
 runApp({
   renderer,
-  gateway,
+  makeGateway,
   repo: `${owner}/${repo}`,
   onQuit: () => {
     renderer.destroy();
