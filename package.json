@@ -1,6 +1,6 @@
 {
   "name": "@stngcoding/tissues",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Terminal UI for browsing and triaging the current repo's GitHub issues",
   "type": "module",
   "module": "src/index.ts",
