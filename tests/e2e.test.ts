@@ -156,7 +156,9 @@ describe("add repo + scrollable repo pane", () => {
     const app = await mount(new FakeGateway(sampleFixture()));
     const frame = app.captureCharFrame();
     expect(frame).toContain("Repos (1)");
-    expect(frame).toContain("stngcoding/tissues");
+    // Grouped by path: the owner is a header, the repo name sits under it.
+    expect(frame).toContain("stngcoding/");
+    expect(frame).toContain("tissues");
   });
 
   test("`a` then typing owner/repo adds it and makes it active", async () => {
@@ -169,7 +171,29 @@ describe("add repo + scrollable repo pane", () => {
     await app.waitForVisualIdle();
     const frame = app.captureCharFrame();
     expect(frame).toContain("Repos (2)");
-    expect(frame).toContain("octo/demo");
+    expect(frame).toContain("octo/"); // new owner group header
+    expect(frame).toContain("demo");
+  });
+
+  test("`d` on the repo pane removes the highlighted repo", async () => {
+    const app = await mount(new FakeGateway(sampleFixture()));
+    // Add a second repo, then focus the repo pane and delete the highlighted one.
+    app.mockInput.pressKey("a");
+    await app.waitForVisualIdle();
+    for (const c of "octo/demo") app.mockInput.pressKey(c);
+    app.mockInput.pressEnter();
+    await app.waitForVisualIdle();
+    expect(app.captureCharFrame()).toContain("Repos (2)");
+
+    app.mockInput.pressTab(); // list -> detail
+    app.mockInput.pressTab(); // detail -> repos
+    await app.waitForVisualIdle();
+    app.mockInput.pressKey("d");
+    await app.waitForVisualIdle();
+
+    const frame = app.captureCharFrame();
+    expect(frame).toContain("Repos (1)");
+    expect(frame).not.toContain("demo"); // the octo/demo group is gone
   });
 });
 

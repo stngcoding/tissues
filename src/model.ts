@@ -88,6 +88,7 @@ export type Event =
   | { type: "ADDREPO_APPEND"; char: string } // char typed in the add-repo prompt
   | { type: "ADDREPO_BACKSPACE" } // Backspace in the add-repo prompt
   | { type: "ADDREPO_SUBMIT" } // Enter in the add-repo prompt
+  | { type: "DELETE_REPO" } // d: remove the highlighted repo from the pane
   | { type: "CONFIRM" } // Enter in overlay
   | { type: "CANCEL" } // Esc
   | { type: "TOGGLE_HELP" } // ?
@@ -301,7 +302,8 @@ export function update(state: AppState, event: Event): Step {
 
     case "ADDREPO_APPEND": {
       if (state.overlay.kind !== "addrepo") return step(state);
-      if (state.overlay.query.length >= 80) return step(state);
+      // `char` may be a whole pasted chunk (e.g. a full GitHub URL), not one key.
+      if (state.overlay.query.length >= 200) return step(state);
       return step({ ...state, overlay: { kind: "addrepo", query: state.overlay.query + event.char } });
     }
 
@@ -312,21 +314,43 @@ export function update(state: AppState, event: Event): Step {
 
     case "ADDREPO_SUBMIT": {
       if (state.overlay.kind !== "addrepo") return step(state);
-      const entry = state.overlay.query.trim();
-      // Require a single "owner/repo" - no spaces, exactly one slash, both sides
-      // non-empty. Anything else just closes the prompt without adding.
-      if (!/^[^/\s]+\/[^/\s]+$/.test(entry)) return step({ ...state, overlay: { kind: "none" } });
-      const existing = state.repos.indexOf(entry);
+      // Accept a bare slug, a github.com URL, or an ssh remote - parseRepo pulls
+      // the canonical "owner/repo" out of any of them. Unparseable just closes.
+      const entry = parseRepo(state.overlay.query);
+      if (!entry) return step({ ...state, overlay: { kind: "none" } });
+      // Dedupe case-insensitively so "Owner/Repo" and a github.com URL for the
+      // same repo can't both land as separate rows. Reuse the stored spelling.
+      const existing = state.repos.findIndex((r) => sameRepo(r, entry));
       if (existing >= 0) {
-        // Already known: highlight it, and switch only if it isn't active already.
+        const known = state.repos[existing]!;
         const withSel = { ...state, selectedRepoIndex: existing, overlay: { kind: "none" as const } };
-        return entry === state.repo ? step({ ...withSel, focus: "list" as const }) : switchRepo(withSel, entry);
+        return sameRepo(known, state.repo) ? step({ ...withSel, focus: "list" as const }) : switchRepo(withSel, known);
       }
-      const repos = [...state.repos, entry];
+      // Keep the pane grouped: sort by owner so same-owner repos sit together,
+      // then point the highlight at the freshly added row.
+      const repos = sortRepos([...state.repos, entry]);
       return switchRepo(
-        { ...state, repos, selectedRepoIndex: repos.length - 1, overlay: { kind: "none" } },
+        { ...state, repos, selectedRepoIndex: repos.indexOf(entry), overlay: { kind: "none" } },
         entry,
       );
+    }
+
+    case "DELETE_REPO": {
+      // Only the repo pane owns this key. Keep at least one repo so the app
+      // always has an active repo to list.
+      if (overlayUp || state.focus !== "repos" || state.repos.length <= 1) return step(state);
+      const idx = state.selectedRepoIndex;
+      const removed = state.repos[idx];
+      if (!removed) return step(state);
+      const repos = state.repos.filter((_, i) => i !== idx);
+      const selectedRepoIndex = clamp(idx, 0, repos.length - 1);
+      // Removing the active repo leaves nothing loaded, so switch to whatever
+      // now sits under the highlight. Removing any other repo just shrinks the
+      // pane - the active list stays exactly as it was.
+      if (removed === state.repo) {
+        return switchRepo({ ...state, repos, selectedRepoIndex }, repos[selectedRepoIndex]!);
+      }
+      return step({ ...state, repos, selectedRepoIndex, toast: null });
     }
 
     case "REQUEST_CLOSE": {
@@ -448,9 +472,16 @@ export interface RowVM {
 }
 
 export interface RepoRowVM {
-  text: string;
+  text: string; // just the repo name; the owner lives in the group header
+  full: string; // canonical "owner/repo"
   selected: boolean; // highlighted row (matters when the repo pane is focused)
   active: boolean; // the repo whose issues are currently loaded
+}
+
+// A path group: one owner header plus its repos, drawn together in the pane.
+export interface RepoGroupVM {
+  owner: string;
+  repos: RepoRowVM[];
 }
 
 export type DetailVM =
@@ -476,7 +507,7 @@ export type OverlayVM =
 
 export interface ViewModel {
   repoHeader: string; // "Repos (2)"
-  repos: RepoRowVM[];
+  repoGroups: RepoGroupVM[]; // repos clustered by owner (path)
   reposFocused: boolean;
   listHeader: string; // "owner/repo · OPEN (28)"
   rows: RowVM[];
@@ -497,6 +528,7 @@ const KEYBINDINGS: { key: string; action: string }[] = [
   { key: "o", action: "toggle open / closed list" },
   { key: "Shift+R", action: "reload the list" },
   { key: "a", action: "add a repo" },
+  { key: "d", action: "remove highlighted repo" },
   { key: "s", action: "go to issue by number" },
   { key: "c", action: "close selected issue" },
   { key: "r", action: "reopen selected issue" },
@@ -527,15 +559,25 @@ export function toViewModel(state: AppState): ViewModel {
 
   const listHeader = `${repoName} · ${setLabel} (${count})`;
 
-  const repos: RepoRowVM[] = state.repos.map((r, i) => ({
-    text: truncate(r, ROW_TEXT_WIDTH),
-    selected: i === state.selectedRepoIndex,
-    active: r === state.repo,
-  }));
+  // Cluster the (already owner-sorted) repos into path groups: a new group
+  // starts whenever the owner changes from the previous row.
+  const repoGroups: RepoGroupVM[] = [];
+  state.repos.forEach((r, i) => {
+    const owner = ownerOf(r);
+    const row: RepoRowVM = {
+      text: truncate(r.slice(owner.length + 1) || r, ROW_TEXT_WIDTH - 2),
+      full: r,
+      selected: i === state.selectedRepoIndex,
+      active: sameRepo(r, state.repo),
+    };
+    const last = repoGroups[repoGroups.length - 1];
+    if (last && last.owner === owner) last.repos.push(row);
+    else repoGroups.push({ owner, repos: [row] });
+  });
 
   return {
     repoHeader: `Repos (${state.repos.length})`,
-    repos,
+    repoGroups,
     reposFocused: state.focus === "repos",
     listHeader,
     rows,
@@ -606,12 +648,50 @@ function overlayVM(state: AppState): OverlayVM {
 function footerFor(state: AppState): string {
   const toggle = state.listState === "open" ? "o closed" : "o open";
   const mutate = state.listState === "open" ? "c close" : "r reopen";
-  return `j/k move · ↵ detail · ${toggle} · ${mutate} · a add-repo · s goto · R reload · tab focus · ? help · q quit`;
+  return `j/k move · ↵ detail · ${toggle} · ${mutate} · a add-repo · d del-repo · s goto · R reload · tab focus · ? help · q quit`;
 }
 
 // ---------------------------------------------------------------------------
 // Small pure helpers
 // ---------------------------------------------------------------------------
+
+/** The "path" a repo groups under: its owner (the part before the slash). */
+export function ownerOf(repo: string): string {
+  const i = repo.indexOf("/");
+  return i >= 0 ? repo.slice(0, i) : repo;
+}
+
+/** Two repo slugs naming the same GitHub repo (owner/repo is case-insensitive). */
+export function sameRepo(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+// Sort by owner then repo (case-insensitive) so the pane clusters each owner's
+// repos into one contiguous group. Stable enough - equal keys never collide
+// because a repo slug is unique.
+export function sortRepos(repos: string[]): string[] {
+  return [...repos].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+}
+
+// Pull a canonical "owner/repo" out of whatever the user typed or pasted:
+//   owner/repo · github.com/owner/repo · https://github.com/owner/repo(.git)
+//   git@github.com:owner/repo.git · any of the above with a trailing / or path.
+// Returns null when there's no owner/repo to be found.
+export function parseRepo(input: string): string | null {
+  let s = input.trim();
+  if (!s) return null;
+  s = s.replace(/^git@[^:]+:/i, ""); // ssh remote -> owner/repo(.git)
+  s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//i, ""); // strip scheme (https://)
+  // Drop a leading host segment (first path part containing a dot, e.g. github.com).
+  if (/^[^/]*\.[^/]*\//.test(s)) s = s.slice(s.indexOf("/") + 1);
+  s = s.replace(/\.git$/i, "").replace(/\/+$/, "");
+  const parts = s.split("/").filter(Boolean);
+  if (parts.length < 2) return null;
+  const [owner, repo] = parts;
+  const ok = /^[A-Za-z0-9._-]+$/;
+  if (!ok.test(owner!) || !ok.test(repo!)) return null;
+  return `${owner}/${repo}`;
+}
 
 export function truncate(s: string, width: number): string {
   if (s.length <= width) return s;

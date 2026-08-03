@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { IssueDetail, IssueSummary } from "../src/domain";
-import { initialState, toViewModel, update, type AppState } from "../src/model";
+import { initialState, parseRepo, toViewModel, update, type AppState } from "../src/model";
 
 const openIssues: IssueSummary[] = [
   { number: 42, title: "Alpha", state: "open" },
@@ -239,7 +239,10 @@ describe("view model", () => {
 describe("repo list", () => {
   test("starts with the single detected repo, active and highlighted", () => {
     const vm = toViewModel(loaded());
-    expect(vm.repos).toEqual([{ text: REPO, selected: true, active: true }]);
+    const repoName = REPO.split("/")[1]!;
+    expect(vm.repoGroups).toEqual([
+      { owner: "stngcoding", repos: [{ text: repoName, full: REPO, selected: true, active: true }] },
+    ]);
     expect(vm.repoHeader).toBe("Repos (1)");
   });
 
@@ -262,11 +265,12 @@ describe("repo list", () => {
     s = update(s, { type: "TOGGLE_FOCUS" }).state; // list -> detail
     s = update(s, { type: "TOGGLE_FOCUS" }).state; // detail -> repos
     expect(s.focus).toBe("repos");
+    // Repos are sorted by owner: octo/cat (index 0) sits before stngcoding/tissues.
+    expect(s.selectedRepoIndex).toBe(0);
+    s = update(s, { type: "MOVE", delta: 1 }).state;
     expect(s.selectedRepoIndex).toBe(1);
-    s = update(s, { type: "MOVE", delta: -1 }).state;
-    expect(s.selectedRepoIndex).toBe(0);
-    s = update(s, { type: "MOVE", delta: -1 }).state; // clamps at top
-    expect(s.selectedRepoIndex).toBe(0);
+    s = update(s, { type: "MOVE", delta: 1 }).state; // clamps at bottom
+    expect(s.selectedRepoIndex).toBe(1);
   });
 
   test("Enter on a different repo switches active repo and re-lists it", () => {
@@ -276,7 +280,7 @@ describe("repo list", () => {
     s = update(s, { type: "ADDREPO_SUBMIT" }).state; // active = octo/cat
     s = update(s, { type: "TOGGLE_FOCUS" }).state;
     s = update(s, { type: "TOGGLE_FOCUS" }).state; // focus repos
-    s = update(s, { type: "MOVE", delta: -1 }).state; // highlight REPO (index 0)
+    s = update(s, { type: "MOVE", delta: 1 }).state; // highlight REPO (sorts after octo/cat)
     const step = update(s, { type: "OPEN_SELECTED" });
     expect(step.state.repo).toBe(REPO);
     expect(step.state.list.status).toBe("loading");
@@ -309,9 +313,9 @@ describe("add repo (a)", () => {
     let s = update(loaded(), { type: "REQUEST_ADDREPO" }).state;
     for (const c of "octo/cat") s = update(s, { type: "ADDREPO_APPEND", char: c }).state;
     const step = update(s, { type: "ADDREPO_SUBMIT" });
-    expect(step.state.repos).toEqual([REPO, "octo/cat"]);
+    expect(step.state.repos).toEqual(["octo/cat", REPO]); // sorted by owner
     expect(step.state.repo).toBe("octo/cat");
-    expect(step.state.selectedRepoIndex).toBe(1);
+    expect(step.state.selectedRepoIndex).toBe(0);
     expect(step.state.overlay.kind).toBe("none");
     expect(step.effects).toEqual([{ type: "LIST", repo: "octo/cat", state: "open" }]);
   });
@@ -333,7 +337,7 @@ describe("add repo (a)", () => {
     s = update(s, { type: "REQUEST_ADDREPO" }).state;
     for (const c of REPO) s = update(s, { type: "ADDREPO_APPEND", char: c }).state;
     const step = update(s, { type: "ADDREPO_SUBMIT" });
-    expect(step.state.repos).toEqual([REPO, "octo/cat"]);
+    expect(step.state.repos).toEqual(["octo/cat", REPO]); // sorted by owner
     expect(step.state.repo).toBe(REPO);
     expect(step.effects).toEqual([{ type: "LIST", repo: REPO, state: "open" }]);
   });
@@ -355,5 +359,110 @@ describe("add repo (a)", () => {
     const step = update(s, { type: "MUTATION_DONE", repo: REPO, action: "close", number: 42 });
     expect(step.state.toast).toBeNull(); // no "#42 closed" over octo/cat
     expect(step.effects).toEqual([]); // no relist/refetch of the wrong repo
+  });
+});
+
+describe("delete repo (d)", () => {
+  // Two repos, focus on the repo pane, highlighting the row that equals `repo`.
+  // Sorted order is [octo/cat (active), stngcoding/tissues].
+  function twoReposFocused(repo: string) {
+    let s = update(loaded(), { type: "REQUEST_ADDREPO" }).state;
+    for (const c of "octo/cat") s = update(s, { type: "ADDREPO_APPEND", char: c }).state;
+    s = update(s, { type: "ADDREPO_SUBMIT" }).state; // active octo/cat
+    s = update(s, { type: "TOGGLE_FOCUS" }).state; // list -> detail
+    s = update(s, { type: "TOGGLE_FOCUS" }).state; // detail -> repos
+    const target = s.repos.indexOf(repo);
+    while (s.selectedRepoIndex < target) s = update(s, { type: "MOVE", delta: 1 }).state;
+    while (s.selectedRepoIndex > target) s = update(s, { type: "MOVE", delta: -1 }).state;
+    return s;
+  }
+
+  test("removing a non-active repo drops it and leaves the active list untouched", () => {
+    const s = twoReposFocused(REPO); // highlight REPO (not active; octo/cat is)
+    const step = update(s, { type: "DELETE_REPO" });
+    expect(step.state.repos).toEqual(["octo/cat"]);
+    expect(step.state.repo).toBe("octo/cat"); // still active
+    expect(step.effects).toEqual([]); // no re-list; active list unchanged
+  });
+
+  test("removing the active repo switches to the neighbour and re-lists it", () => {
+    const s = twoReposFocused("octo/cat"); // highlight octo/cat (the active one)
+    const step = update(s, { type: "DELETE_REPO" });
+    expect(step.state.repos).toEqual([REPO]);
+    expect(step.state.repo).toBe(REPO); // switched to survivor
+    expect(step.state.list.status).toBe("loading");
+    expect(step.effects).toEqual([{ type: "LIST", repo: REPO, state: "open" }]);
+  });
+
+  test("d does nothing unless the repo pane is focused", () => {
+    let s = update(loaded(), { type: "REQUEST_ADDREPO" }).state;
+    for (const c of "octo/cat") s = update(s, { type: "ADDREPO_APPEND", char: c }).state;
+    s = update(s, { type: "ADDREPO_SUBMIT" }).state; // focus is "list"
+    const step = update(s, { type: "DELETE_REPO" });
+    expect(step.state.repos).toEqual(["octo/cat", REPO]); // sorted, unchanged
+  });
+
+  test("the last remaining repo can't be deleted", () => {
+    let s = update(loaded(), { type: "TOGGLE_FOCUS" }).state; // detail
+    s = update(s, { type: "TOGGLE_FOCUS" }).state; // repos
+    const step = update(s, { type: "DELETE_REPO" });
+    expect(step.state.repos).toEqual([REPO]);
+    expect(step.effects).toEqual([]);
+  });
+});
+
+describe("parseRepo (URL / paste normalisation)", () => {
+  test.each([
+    ["octo/cat", "octo/cat"],
+    ["  octo/cat  ", "octo/cat"],
+    ["octo/cat/", "octo/cat"],
+    ["https://github.com/octo/cat", "octo/cat"],
+    ["https://github.com/octo/cat.git", "octo/cat"],
+    ["https://github.com/octo/cat/issues/3", "octo/cat"],
+    ["github.com/octo/cat", "octo/cat"],
+    ["git@github.com:octo/cat.git", "octo/cat"],
+  ])("%s -> %s", (input, expected) => {
+    expect(parseRepo(input)).toBe(expected);
+  });
+
+  test.each(["", "nope", "/", "octo/", "/cat", "http://github.com/octo"])("%s -> null", (input) => {
+    expect(parseRepo(input)).toBeNull();
+  });
+
+  test("pasting a full URL adds the repo (chunk arrives in one append)", () => {
+    let s = update(loaded(), { type: "REQUEST_ADDREPO" }).state;
+    s = update(s, { type: "ADDREPO_APPEND", char: "https://github.com/octo/cat" }).state;
+    const step = update(s, { type: "ADDREPO_SUBMIT" });
+    expect(step.state.repos).toContain("octo/cat");
+    expect(step.state.repo).toBe("octo/cat");
+  });
+
+  test("a URL for a repo already tracked doesn't duplicate it", () => {
+    // Add via URL, then add the same repo via its bare slug: still one row.
+    let s = update(loaded(), { type: "REQUEST_ADDREPO" }).state;
+    s = update(s, { type: "ADDREPO_APPEND", char: "https://github.com/octo/cat" }).state;
+    s = update(s, { type: "ADDREPO_SUBMIT" }).state;
+    s = update(s, { type: "REQUEST_ADDREPO" }).state;
+    s = update(s, { type: "ADDREPO_APPEND", char: "OCTO/CAT" }).state; // different case
+    const step = update(s, { type: "ADDREPO_SUBMIT" });
+    expect(step.state.repos.filter((r) => r.toLowerCase() === "octo/cat")).toHaveLength(1);
+  });
+});
+
+describe("group repos by path (owner)", () => {
+  test("repos cluster under one header per owner, sorted", () => {
+    // Add three repos across two owners in a jumbled order.
+    let s = loaded();
+    for (const r of ["zeta/one", "octo/cat", "octo/ant"]) {
+      s = update(s, { type: "REQUEST_ADDREPO" }).state;
+      s = update(s, { type: "ADDREPO_APPEND", char: r }).state;
+      s = update(s, { type: "ADDREPO_SUBMIT" }).state;
+    }
+    const groups = toViewModel(s).repoGroups;
+    // Owners sorted; octo's repos sorted within the group.
+    expect(groups.map((g) => g.owner)).toEqual(["octo", "stngcoding", "zeta"]);
+    const octo = groups[0]!;
+    expect(octo.repos.map((r) => r.text)).toEqual(["ant", "cat"]);
+    expect(octo.repos.every((r) => r.full.startsWith("octo/"))).toBe(true);
   });
 });

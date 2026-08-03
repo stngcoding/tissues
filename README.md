@@ -85,6 +85,7 @@ UI ever opens:
 | `g` / `G` | jump to top / bottom               |
 | `o`       | toggle open / closed list          |
 | `a`       | add a repo (`owner/repo`)          |
+| `d`       | remove the highlighted repo        |
 | `s`       | go to issue by number              |
 | `Shift+R` | reload the list                    |
 | `c`       | close the selected issue           |
@@ -94,8 +95,10 @@ UI ever opens:
 
 The left column stacks a scrollable **repo list** over the issue list: `Tab`
 to the repo pane, `j`/`k` to highlight a repo, `Enter` to switch to it. Add more
-with `a`. When the detail pane is focused, `j`/`k`/`g`/`G` scroll the issue body
-instead of moving the list selection.
+with `a` (accepts a bare `owner/repo`, a pasted `github.com` URL, or an ssh
+remote), remove the highlighted one with `d`. Repos are **grouped by owner**:
+each owner is a header with its repos listed underneath. When the detail pane is
+focused, `j`/`k`/`g`/`G` scroll the issue body instead of moving the list selection.
 
 ## Development
 

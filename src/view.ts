@@ -13,7 +13,7 @@ import {
 } from "@opentui/core";
 import { uid } from "./ids";
 import { renderMarkdown } from "./markdown";
-import { LIST_WIDTH, type DetailVM, type OverlayVM, type RepoRowVM, type Toast, type ViewModel } from "./model";
+import { LIST_WIDTH, type DetailVM, type OverlayVM, type Toast, type ViewModel } from "./model";
 
 const FOCUSED = "#5FD7FF";
 const UNFOCUSED = "#444444";
@@ -189,26 +189,32 @@ export class View {
   private renderRepos(vm: ViewModel) {
     // The highlight only reads as "selected" when the pane is focused; otherwise
     // just the active-repo marker shows, so an unfocused pane isn't noisy.
-    const sig = JSON.stringify({ repos: vm.repos, focused: vm.reposFocused });
+    const sig = JSON.stringify({ groups: vm.repoGroups, focused: vm.reposFocused });
     if (sig === this.repoSig) return;
     this.repoSig = sig;
     this.clearChildren(this.repoBox);
 
     let selectedId: string | null = null;
-    for (const repo of vm.repos) {
-      const id = uid("repo");
-      const highlighted = repo.selected && vm.reposFocused;
-      if (repo.selected) selectedId = id;
-      const marker = repo.active ? "● " : "  ";
+    for (const group of vm.repoGroups) {
+      // Path header - one per owner, the repos below it are indented.
       this.repoBox.add(
-        new TextRenderable(this.r, {
-          id,
-          content: `${marker}${repo.text}`,
-          width: "100%",
-          fg: highlighted ? SELECTED_FG : repo.active ? ACTIVE_FG : undefined,
-          bg: highlighted ? SELECTED_BG : undefined,
-        }),
+        new TextRenderable(this.r, { id: uid("repo-grp"), content: `${group.owner}/`, fg: DIM_FG, width: "100%" }),
       );
+      for (const repo of group.repos) {
+        const id = uid("repo");
+        const highlighted = repo.selected && vm.reposFocused;
+        if (repo.selected) selectedId = id;
+        const marker = repo.active ? "● " : "  ";
+        this.repoBox.add(
+          new TextRenderable(this.r, {
+            id,
+            content: `  ${marker}${repo.text}`,
+            width: "100%",
+            fg: highlighted ? SELECTED_FG : repo.active ? ACTIVE_FG : undefined,
+            bg: highlighted ? SELECTED_BG : undefined,
+          }),
+        );
+      }
     }
     if (selectedId) this.repoBox.scrollChildIntoView(selectedId);
   }

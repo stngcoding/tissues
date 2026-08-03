@@ -115,8 +115,10 @@ export function runApp(opts: RunAppOptions): AppHandle {
       if (isEnter) dispatch({ type: "ADDREPO_SUBMIT" });
       else if (isEsc) dispatch({ type: "CANCEL" });
       else if (name === "backspace") dispatch({ type: "ADDREPO_BACKSPACE" });
-      // Accept the characters a "owner/repo" slug can contain.
-      else if (key.sequence && /^[A-Za-z0-9._/-]$/.test(key.sequence)) dispatch({ type: "ADDREPO_APPEND", char: key.sequence });
+      // Accept any run of printable, non-space characters - one typed key OR a
+      // whole pasted chunk (a github.com URL, ssh remote, ...). The model's
+      // parseRepo normalises it to owner/repo on submit.
+      else if (key.sequence && /^[\x21-\x7E]+$/.test(key.sequence)) dispatch({ type: "ADDREPO_APPEND", char: key.sequence });
       return;
     }
 
@@ -130,6 +132,7 @@ export function runApp(opts: RunAppOptions): AppHandle {
     if (name === "o") return dispatch({ type: "TOGGLE_LIST_STATE" });
     if (name === "s") return dispatch({ type: "REQUEST_GOTO" });
     if (name === "a") return dispatch({ type: "REQUEST_ADDREPO" });
+    if (name === "d") return dispatch({ type: "DELETE_REPO" });
     if (isEnter) return dispatch({ type: "OPEN_SELECTED" });
     if (name === "c") return dispatch({ type: "REQUEST_CLOSE" });
     if ((name === "r" && shift) || key.sequence === "R") return dispatch({ type: "RELOAD" });
